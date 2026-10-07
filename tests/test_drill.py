@@ -12,7 +12,7 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(spec["routers"], ["A", "B", "C", "D"])
         self.assertEqual(len(spec["links"]), 8)
-        self.assertEqual(len(spec["events"]), 14)
+        self.assertEqual(len(spec["events"]), 17)
 
     def test_defaults_applied(self):
         spec, errors = parse_all("A B", "A B", "announce A A prefix=A")

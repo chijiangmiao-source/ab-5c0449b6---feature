@@ -22,6 +22,21 @@ const MSG_STATUS = {
   failed: "失败",
 };
 
+const HOP_RESULT = {
+  forwarded: "转发",
+  arrived: "到达",
+  stranded: "滞留",
+  expired: "过期忽略",
+  failed: "失败",
+};
+
+const ATTEMPT_VERDICT = {
+  pending: "滞留待投递",
+  delivered: "投递成功",
+  expired: "过期忽略",
+  failed: "投递失败",
+};
+
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
@@ -213,15 +228,101 @@ function renderBest(run, step) {
 }
 
 function renderMessages(run, state) {
+  if (!state.messages.length) {
+    $("msg-table").innerHTML = tableHtml([], [], "暂无消息");
+    return;
+  }
+  const headers = ["#", "源 → 宿", "内容", "状态", "路径", "说明", "追溯"];
   const rows = state.messages.map((m) => {
     const status = MSG_STATUS[m.status] || m.status;
     const cls = `msg-${m.status}`;
     const hops = m.hops && m.hops.length ? m.hops.join(" → ") : "—";
+    const attempts = m.attempts ? m.attempts.length : 0;
     return [`#${m.id}`, `${esc(m.src)} → ${esc(m.dst)}`, esc(m.payload || ""),
-            `<span class="${cls}">${esc(status)}</span>`, esc(hops), esc(m.detail || "")];
+            `<span class="${cls}">${esc(status)}</span>`, esc(hops), esc(m.detail || ""),
+            `<button class="trace-btn" data-msg="${m.id}">复核（${attempts} 次尝试）</button>`];
   });
-  $("msg-table").innerHTML =
-    tableHtml(["#", "源 → 宿", "内容", "状态", "路径", "说明"], rows, "暂无消息");
+  $("msg-table").innerHTML = tableHtml(headers, rows, "暂无消息");
+}
+
+function traceEventText(ev) {
+  if (!ev) return "入队前初始状态";
+  return describeEvent(ev);
+}
+
+function renderTraceBody(data) {
+  const m = data.message;
+  const attempts = m.attempts || [];
+  const head =
+    `<div class="trace-head">
+       <div>消息 <b>#${esc(m.id)}</b>：${esc(m.src)} → ${esc(m.dst)}
+         <span class="trace-payload">「${esc(m.payload || "空载荷")}」</span></div>
+       <div class="msg-${esc(m.status)}">最终状态：${esc(MSG_STATUS[m.status] || m.status)}
+         ${m.detail ? esc("（" + m.detail + "）") : ""}</div>
+       <div class="trace-meta">演练 #${esc(data.seq)}（${esc(data.run_id)}）· 共 ${attempts.length} 次尝试 ·
+         入队纪元快照已随消息固定</div>
+     </div>`;
+  if (!attempts.length) {
+    return head + '<div class="empty">该消息尚无实际尝试记录</div>';
+  }
+  const blocks = attempts.map((a) => {
+    const verdictCls = `tv-${esc(a.verdict)}`;
+    const verdict = ATTEMPT_VERDICT[a.verdict] || a.verdict;
+    const hopRows = a.hops.map((h) => {
+      const best = h.best_path ? h.best_path.join(" → ") : "（无路由）";
+      const lp = h.localpref === null || h.localpref === undefined ? "—"
+        : (h.localpref >= (1 << 30) ? "∞" : String(h.localpref));
+      const epoch = h.send_epoch === null || h.send_epoch === undefined ? "—" : String(h.send_epoch);
+      const to = h.to === null || h.to === undefined ? "—" : esc(h.to);
+      const result = HOP_RESULT[h.result] || h.result;
+      return `<tr>
+        <td>${esc(h.from)} → ${to}</td>
+        <td>${esc(h.prefix)}</td>
+        <td>${esc(best)}</td>
+        <td>${lp}</td>
+        <td>${epoch}</td>
+        <td><span class="hr hr-${esc(h.result)}">${esc(result)}</span></td>
+        <td>${esc(h.reason || "")}</td>
+      </tr>`;
+    }).join("");
+    return `<div class="attempt ${verdictCls}">
+      <div class="attempt-head">
+        <b>第 ${attempts.indexOf(a) + 1} 次尝试</b> · 发生步骤 ${a.step} ·
+        触发事件：${esc(traceEventText(a.event))}
+      </div>
+      <table class="hop-table">
+        <thead><tr><th>发送 → 接收</th><th>采用前缀</th><th>当时最优路径</th>
+        <th>本地偏好</th><th>发送纪元</th><th>本跳裁决</th><th>裁决依据 / 未继续转发原因</th></tr></thead>
+        <tbody>${hopRows}</tbody>
+      </table>
+      <div class="attempt-foot">
+        本次裁决：<span class="hr hr-${esc(a.verdict)}">${esc(verdict)}</span>
+        · 未继续转发的直接原因：${esc(a.stop_reason || "—")}
+      </div>
+    </div>`;
+  }).join("");
+  return head + `<div class="attempt-list">${blocks}</div>` +
+    '<div class="trace-note">追溯记录仅追加：链路断开重连或最优路径改变后的新尝试按步骤追加，旧尝试永不改写；同一步骤内的自动重试不产生重复记录。</div>';
+}
+
+async function openTrace(msgId) {
+  const modal = $("trace-modal");
+  const body = $("trace-body");
+  body.innerHTML = '<div class="empty">正在载入追溯记录…</div>';
+  modal.hidden = false;
+  const step = selectedStep || undefined;
+  const qs = step ? `?step=${encodeURIComponent(step)}` : "";
+  const resp = await fetch(`/api/drills/current/messages/${encodeURIComponent(msgId)}${qs}`);
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data) {
+    body.innerHTML = `<div class="trace-error">${esc((data && data.error) || "追溯记录不可用")}</div>`;
+    return;
+  }
+  body.innerHTML = renderTraceBody(data);
+}
+
+function closeTrace() {
+  $("trace-modal").hidden = true;
 }
 
 function render() {
@@ -266,6 +367,17 @@ function bind() {
     if (currentRun && selectedStep < currentRun.completed_steps) {
       selectedStep += 1; render();
     }
+  });
+  $("msg-table").addEventListener("click", (e) => {
+    const btn = e.target.closest(".trace-btn");
+    if (btn) openTrace(Number(btn.dataset.msg)).catch(console.error);
+  });
+  $("trace-close").addEventListener("click", closeTrace);
+  $("trace-modal").addEventListener("click", (e) => {
+    if (e.target === $("trace-modal")) closeTrace();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("trace-modal").hidden) closeTrace();
   });
 }
 

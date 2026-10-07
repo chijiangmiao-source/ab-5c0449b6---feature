@@ -111,5 +111,92 @@ class ConvergenceFlagTest(unittest.TestCase):
                 self.assertIn(required, all_kinds)
 
 
+class MessageTraceQueryTest(unittest.TestCase):
+    def test_trace_returned_for_current_run_message(self):
+        spec = sample_spec()
+        with tempfile.TemporaryDirectory() as tmp:
+            m = RunManager(tmp, step_delay=0.01)
+            m.create(spec["routers"], spec["links"], spec["events"])
+            wait_done(m)
+            trace, err = m.message_trace(1)
+            self.assertIsNone(err)
+            self.assertEqual(trace["message"]["id"], 1)
+            self.assertGreaterEqual(trace["attempt_count"], 1)
+            # 滞留后恢复的消息含两条按步骤排列的尝试
+            trace5, err = m.message_trace(5)
+            self.assertIsNone(err)
+            verdicts = [a["verdict"] for a in trace5["message"]["attempts"]]
+            self.assertEqual(verdicts, ["pending", "delivered"])
+            steps = [a["step"] for a in trace5["message"]["attempts"]]
+            self.assertEqual(steps, sorted(steps))
+
+    def test_missing_message_returns_clear_error(self):
+        spec = sample_spec()
+        with tempfile.TemporaryDirectory() as tmp:
+            m = RunManager(tmp, step_delay=0.01)
+            m.create(spec["routers"], spec["links"], spec["events"])
+            wait_done(m)
+            trace, err = m.message_trace(999)
+            self.assertIsNone(trace)
+            self.assertIn("不存在", err)
+            self.assertIn("#999", err)
+
+    def test_trace_without_any_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            m = RunManager(tmp, step_delay=0.01)
+            trace, err = m.message_trace(1)
+            self.assertIsNone(trace)
+            self.assertIn("不存在演练", err)
+
+    def test_trace_scoped_to_current_run_after_restart(self):
+        spec = sample_spec()
+        with tempfile.TemporaryDirectory() as tmp:
+            m1 = RunManager(tmp, step_delay=0.01)
+            m1.create(spec["routers"], spec["links"], spec["events"])
+            done = wait_done(m1)
+            m1.shutdown()
+            # 重启恢复后，追溯记录顺序与内容须与不中断执行一致
+            m2 = RunManager(tmp, step_delay=0.01)
+            cur = m2.current()["run"]
+            self.assertEqual(cur["run_id"], done["run_id"])
+            for mid in range(1, 6):
+                trace, err = m2.message_trace(mid)
+                self.assertIsNone(err)
+                restored = trace["message"]
+                snapshot_msg = next(
+                    s for s in done["steps"][-1]["state"]["messages"] if s["id"] == mid
+                )
+                self.assertEqual(
+                    restored["attempts"], snapshot_msg["attempts"],
+                    "消息 #{} 恢复后追溯与检查点不一致".format(mid),
+                )
+                self.assertEqual(restored["status"], snapshot_msg["status"])
+
+    def test_trace_does_not_leak_superseded_run(self):
+        routers = ["A", "B"]
+        links = [{"src": "A", "dst": "B", "localpref": 100, "epoch": 1}]
+        with tempfile.TemporaryDirectory() as tmp:
+            m = RunManager(tmp, step_delay=0.01)
+            # 旧演练含一条消息
+            old_events = [
+                {"type": "announce", "from": "A", "to": "A", "prefix": "A",
+                 "path": ["A"], "epoch": 1},
+                {"type": "deliver", "src": "B", "dst": "A", "msg": "old-run-msg"},
+            ]
+            first = m.create(routers, links, old_events)
+            wait_done(m)
+            # 新演练没有任何消息
+            m.create(routers, links, [
+                {"type": "announce", "from": "A", "to": "A", "prefix": "Z",
+                 "path": ["A"], "epoch": 1},
+            ])
+            wait_done(m)
+            trace, err = m.message_trace(1)
+            self.assertIsNone(trace)
+            self.assertIn("不存在", err)  # 仅报当前演练无此消息，不返回旧演练记录
+            self.assertNotIn("old-run-msg", str(err))
+            self.assertNotEqual(m.current()["run"]["run_id"], first["run_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

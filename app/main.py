@@ -7,13 +7,14 @@
   GET  /api/sample            预置示例演练（DSL 文本）
   POST /api/drills            创建新演练（后台计算并保存检查点）
   GET  /api/drills/current    当前演练及已完成步骤（页面重开后恢复）
+  GET  /api/drills/current/messages/<id>  单条消息的稳定追溯记录
 """
 
 import json
 import os
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from . import drill, sample
 from .runner import RunManager
@@ -77,7 +78,35 @@ def make_handler(manager):
                 return self._json(sample.sample_drill())
             if path == "/api/drills/current":
                 return self._json(manager.current())
+            if path.startswith("/api/drills/current/messages/"):
+                raw = path[len("/api/drills/current/messages/"):]
+                mid = self._parse_msg_id(raw)
+                if mid is None:
+                    return self._json({"error": "消息标识须为正整数"}, 400)
+                query = parse_qs(urlparse(self.path).query)
+                step = None
+                if "step" in query:
+                    try:
+                        step = int(query["step"][0])
+                    except ValueError:
+                        step = -1
+                    if step < 0:
+                        return self._json({"error": "step 须为非负整数"}, 400)
+                trace, err = manager.message_trace(mid, step)
+                if err is not None:
+                    return self._json({"error": err}, 404)
+                return self._json(trace)
             return self._json({"error": "not found"}, 404)
+
+        @staticmethod
+        def _parse_msg_id(raw):
+            if not raw or "/" in raw:
+                return None
+            try:
+                mid = int(raw)
+            except ValueError:
+                return None
+            return mid if mid >= 1 else None
 
         def do_HEAD(self):
             self.do_GET()

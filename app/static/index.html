@@ -69,11 +69,21 @@
       <div id="best-table"></div>
     </div>
     <div class="panel">
-      <h2>待投递消息</h2>
+      <h2>消息与逐跳追溯</h2>
       <div id="msg-table"></div>
     </div>
   </section>
 </main>
+
+<div id="trace-modal" class="modal-mask" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trace-title">
+    <div class="modal-head">
+      <h2 id="trace-title">消息稳定追溯</h2>
+      <button id="trace-close" title="关闭">✕</button>
+    </div>
+    <div id="trace-body" class="modal-body"></div>
+  </div>
+</div>
 
 <footer>
   <span>收敛校验：演练完成后自动从头不中断回放全部事件并与检查点逐步比对。</span>

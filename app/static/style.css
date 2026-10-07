@@ -170,3 +170,73 @@ footer {
   font-size: 12px;
   border-top: 1px solid var(--border);
 }
+
+/* ---- 消息追溯弹窗 ---- */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(1, 4, 9, 0.72);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 5vh 16px;
+  z-index: 50;
+  overflow-y: auto;
+}
+
+.modal-mask[hidden] { display: none; }
+
+.modal {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: min(1040px, 100%);
+  padding: 16px 20px 20px;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.modal-head h2 { margin: 0; font-size: 16px; }
+.modal-head button { padding: 3px 10px; }
+
+.modal-body { font-size: 12.5px; }
+
+.trace-head { display: flex; flex-direction: column; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.trace-payload { color: var(--muted); }
+.trace-meta { color: var(--muted); font-size: 12px; }
+
+.attempt-list { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
+
+.attempt {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #0b0f14;
+}
+
+.attempt.tv-delivered { border-left: 3px solid var(--ok); }
+.attempt.tv-pending { border-left: 3px solid var(--warn); }
+.attempt.tv-expired { border-left: 3px solid var(--stale); }
+.attempt.tv-failed { border-left: 3px solid var(--bad); }
+
+.attempt-head { margin-bottom: 8px; }
+.attempt-foot { margin-top: 8px; color: var(--muted); }
+
+.hop-table th, .hop-table td { font-size: 12px; vertical-align: top; }
+
+.hr { font-weight: 600; white-space: nowrap; }
+.hr-forwarded, .hr-arrived { color: var(--ok); }
+.hr-stranded { color: var(--warn); }
+.hr-expired { color: var(--stale); }
+.hr-failed { color: var(--bad); }
+.hr-pending { color: var(--warn); }
+
+.trace-note { color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+.trace-error { color: var(--bad); padding: 12px 0; }
+
+.trace-btn { padding: 3px 9px; font-size: 12px; white-space: nowrap; }

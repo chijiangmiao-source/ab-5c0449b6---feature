@@ -1,5 +1,6 @@
 """预置示例演练：覆盖环路拒绝、本地偏好裁决、断开切换、滞留消息、
-重连纪元递增、过期消息忽略、旧纪元通告/撤销忽略与恢复收敛校验。"""
+重连纪元递增、过期消息忽略、旧纪元通告/撤销忽略、滞留后路由恢复
+投递与恢复收敛校验。"""
 
 ROUTERS_TEXT = "A B C D"
 
@@ -38,6 +39,12 @@ announce D C prefix=D path=D epoch=1
 withdraw D C prefix=D epoch=1
 # 8) 正常投递
 deliver C A msg=after-reconnect
+# 9) D 撤销本机始发前缀 D：撤销沿全网传播，B 无到 D 的路由，消息滞留
+withdraw D D prefix=D
+deliver B D msg=stranded-then-restored
+# 10) D 重新始发前缀 D：链路纪元均未变化，滞留消息的新尝试按当时
+#     最优路径 B-C-D 逐跳投递成功；旧尝试（滞留）原样保留可复核
+announce D D prefix=D
 """
 
 

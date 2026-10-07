@@ -2,18 +2,18 @@
   "files": [
     {
       "name": "app.js",
-      "sha256": "7a5ed6a39a59249b5f9e535db230e4efe21a6da1969ce56c656f100604491a44",
-      "bytes": 9900
+      "sha256": "d6d24cfaa6a0b8e21b6840cff9f5de9fff1d5da1028cad151cce5a6ad9ab025d",
+      "bytes": 14544
     },
     {
       "name": "index.html",
-      "sha256": "1796123b2a73401cc65af3f3588435f73c2c77dec9f5584ccee730a390e07d3f",
-      "bytes": 2992
+      "sha256": "7f5f7717b712d4a6fb74dae7d29b4f748f009b67b088b44cc0dd750e6ea2b564",
+      "bytes": 3349
     },
     {
       "name": "style.css",
-      "sha256": "c589ce00cb7cbf1141473cdf61487916a5c7cf792cf5d5189c590f42a5900e3a",
-      "bytes": 4630
+      "sha256": "66d1fb0aeab3b1dc6111f6dd7de547857655ac396fbbf47ec8d332699f0ca531",
+      "bytes": 6615
     }
   ]
 }

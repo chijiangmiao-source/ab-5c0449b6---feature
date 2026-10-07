@@ -291,5 +291,111 @@ class RecoveryConvergenceTest(unittest.TestCase):
         self.assertEqual(best["neighbor"], "D")
 
 
+class MessageTraceTest(unittest.TestCase):
+    """消息首次入队后保留稳定追溯：逐跳裁决、旧尝试原样保留、按步骤追加。"""
+
+    def _line_topology(self):
+        return make_state(
+            ["A", "B", "C"],
+            simple_links([("A", "B"), ("B", "C")]),
+        )
+
+    def test_delivered_trace_lists_every_hop_verdict(self):
+        st = self._line_topology()
+        engine.apply_event(st, {"type": "announce", "from": "A", "to": "A", "prefix": "A"})
+        engine.apply_event(st, {"type": "deliver", "src": "C", "dst": "A", "msg": "m"})
+        msg = st["messages"][0]
+        self.assertEqual(len(msg["attempts"]), 1)
+        rec = msg["attempts"][0]
+        self.assertEqual(rec["step"], 2)
+        self.assertEqual(rec["verdict"], "delivered")
+        self.assertEqual(rec["event"]["type"], "deliver")
+        results = [(h["from"], h["to"], h["result"]) for h in rec["hops"]]
+        self.assertEqual(results, [
+            ("C", "B", "forwarded"),
+            ("B", "A", "forwarded"),
+            ("A", "A", "arrived"),
+        ])
+        hop = rec["hops"][0]
+        self.assertEqual(hop["prefix"], "A")
+        self.assertEqual(hop["best_path"], ["A", "B"])
+        self.assertEqual(hop["localpref"], 100)
+        self.assertEqual(hop["send_epoch"], 1)
+        self.assertTrue(hop["reason"])
+
+    def test_old_attempt_kept_new_attempt_appended_after_route_restore(self):
+        st = self._line_topology()
+        engine.apply_event(st, {"type": "announce", "from": "A", "to": "A", "prefix": "A"})
+        # A 撤销始发：C 无到 A 的路由，消息滞留
+        engine.apply_event(st, {"type": "withdraw", "from": "A", "to": "A", "prefix": "A"})
+        engine.apply_event(st, {"type": "deliver", "src": "C", "dst": "A", "msg": "m"})
+        msg = st["messages"][0]
+        self.assertEqual(msg["status"], "pending")
+        self.assertEqual([a["verdict"] for a in msg["attempts"]], ["pending"])
+        old = msg["attempts"][0]
+        self.assertEqual(old["hops"][0]["result"], "stranded")
+        self.assertIn("无到 A 的可用路由", old["stop_reason"])
+        # A 重新始发（链路纪元不变）：新尝试按发生步骤追加并投递成功
+        engine.apply_event(st, {"type": "announce", "from": "A", "to": "A", "prefix": "A"})
+        self.assertEqual(msg["status"], "delivered")
+        self.assertEqual([a["step"] for a in msg["attempts"]], [3, 4])
+        self.assertEqual([a["verdict"] for a in msg["attempts"]], ["pending", "delivered"])
+        # 旧尝试保持原样：仍是滞留裁决，hops 不被补写
+        self.assertEqual(old["verdict"], "pending")
+        self.assertEqual(len(old["hops"]), 1)
+        self.assertEqual(old["hops"][0]["result"], "stranded")
+        new = msg["attempts"][1]
+        self.assertEqual([h["result"] for h in new["hops"]],
+                         ["forwarded", "forwarded", "arrived"])
+        self.assertEqual(msg["hops"], ["C", "B", "A"])
+
+    def test_expired_attempt_records_epochs_and_stop_reason(self):
+        st = make_state(["A", "B"], simple_links([("A", "B")]))
+        engine.apply_event(st, {"type": "announce", "from": "A", "to": "A", "prefix": "A"})
+        engine.apply_event(st, {"type": "disconnect", "from": "A", "to": "B"})
+        engine.apply_event(st, {"type": "deliver", "src": "B", "dst": "A", "msg": "m"})
+        engine.apply_event(st, {"type": "reconnect", "from": "A", "to": "B"})
+        msg = st["messages"][0]
+        self.assertEqual([a["verdict"] for a in msg["attempts"]], ["pending", "expired"])
+        hop = msg["attempts"][1]["hops"][0]
+        self.assertEqual(hop["result"], "expired")
+        self.assertEqual(hop["send_epoch"], 2)
+        self.assertEqual(hop["best_path"], ["A"])
+        self.assertIn("纪元 1 → 2", hop["reason"])
+        self.assertIn("纪元 1 → 2", msg["attempts"][1]["stop_reason"])
+
+    def test_no_duplicate_trace_record_within_same_step(self):
+        st = self._line_topology()
+        engine.apply_event(st, {"type": "announce", "from": "A", "to": "A", "prefix": "A"})
+        engine.apply_event(st, {"type": "deliver", "src": "C", "dst": "A", "msg": "m"})
+        # 再造一条滞留消息，并在同一事件步骤内重复触发自动重试
+        engine.apply_event(st, {"type": "disconnect", "from": "A", "to": "B"})
+        engine.apply_event(st, {"type": "deliver", "src": "C", "dst": "X", "msg": "m2"})
+        msg = st["messages"][1]
+        before = len(msg["attempts"])
+        engine._attempt_deliveries(st, [])
+        engine._attempt_deliveries(st, [])
+        self.assertEqual(len(msg["attempts"]), before)  # 同一步骤不重复记录
+        self.assertEqual(len(msg["attempts"]), 1)
+        # 进入下一事件步骤后允许再次尝试并追加新记录
+        engine.apply_event(st, {"type": "reconnect", "from": "A", "to": "B"})
+        self.assertEqual(len(msg["attempts"]), 2)
+
+    def test_trace_identical_between_interrupted_and_uninterrupted_runs(self):
+        spec, errors = parse_all(**sample_drill())
+        self.assertEqual(errors, [])
+        full_state, _ = engine.run_script(spec["routers"], spec["links"], spec["events"])
+        # 任意断点恢复后续跑，追溯记录须与不中断执行逐条一致
+        for k in range(0, len(spec["events"]) + 1):
+            state, _ = engine.run_script(spec["routers"], spec["links"], spec["events"], upto=k)
+            for ev in spec["events"][k:]:
+                engine.apply_event(state, ev)
+            self.assertEqual(
+                engine.canonical(state["messages"]),
+                engine.canonical(full_state["messages"]),
+                "断点 {} 恢复后消息追溯与不中断执行不一致".format(k),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

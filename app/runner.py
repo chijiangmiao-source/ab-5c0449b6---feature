@@ -169,6 +169,42 @@ class RunManager(object):
 
     # ---------------- 查询 ----------------
 
+    def message_trace(self, msg_id, step=None):
+        """返回当前演练中某条消息的稳定追溯记录。
+
+        step 给定时返回该检查步骤时刻的消息状态（追溯记录天然仅追加，
+        因而即便是更早的步骤，已写入的记录也与后来完全一致）；step
+        缺省返回最新检查点。仅服务于当前演练：消息不存在或标识不
+        属于当前演练时返回 (None, 错误说明)，且不读取、不泄露磁盘
+        上其他演练的记录。
+        """
+        with self.lock:
+            if self.run is None:
+                return None, "当前不存在演练，请先创建或恢复演练"
+            meta = dict(self.run["meta"])
+            steps = list(self.run["steps"])
+        if not steps:
+            return None, "演练尚未产生任何检查步骤"
+        if step is None:
+            target = steps[-1]
+        else:
+            target = next((s for s in steps if s["step"] == step), None)
+            if target is None:
+                return None, "步骤 {} 不存在（当前已完成 {} 步）".format(
+                    step, len(steps) - 1)
+        for msg in target.get("state", {}).get("messages", []):
+            if msg["id"] == msg_id:
+                break
+        else:
+            return None, "消息 #{} 不存在或不属于当前演练 #{}".format(msg_id, meta["seq"])
+        return {
+            "run_id": meta["run_id"],
+            "seq": meta["seq"],
+            "step": target["step"],
+            "message": copy.deepcopy(msg),
+            "attempt_count": len(msg.get("attempts", [])),
+        }, None
+
     def current(self):
         with self.lock:
             if self.run is None:
