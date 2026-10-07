@@ -169,6 +169,21 @@ class RunManager(object):
 
     # ---------------- 查询 ----------------
 
+    def message_trace(self, mid):
+        """当前演练中指定消息的完整追溯记录；不存在时返回 None。
+
+        仅查询当前演练最近完成步骤的状态，不读取其他演练的目录或
+        检查点，因此不会泄露其他演练的消息记录。
+        """
+        with self.lock:
+            if self.run is None or not self.run["steps"]:
+                return None
+            state = self.run["steps"][-1]["state"]
+        for msg in state.get("messages", []):
+            if msg.get("id") == mid:
+                return copy.deepcopy(msg)
+        return None
+
     def current(self):
         with self.lock:
             if self.run is None:

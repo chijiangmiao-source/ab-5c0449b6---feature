@@ -48,6 +48,7 @@ def initial_state(routers, links):
         "announced": {r: {} for r in routers},    # router -> prefix -> {path, sent: {nbr: path}}
         "messages": [],
         "msg_seq": 0,
+        "step": 0,                                # 已应用的事件步骤号（供消息追溯记录发生步骤）
     }
 
 
@@ -282,66 +283,109 @@ def _deliver(state, src, dst, payload, logs):
         "status": "pending",
         "hops": [],
         "detail": "",
+        "trace": [],  # 逐次尝试的追溯记录：入队后只追加、不改写
     })
     logs.append({"kind": "enqueue", "text": "消息 #{} 入队：{} → {}（{}）".format(mid, src, dst, payload or "空载荷")})
 
 
 def _attempt(state, msg, logs):
-    """沿各路由器当前最优路径逐跳投递；每跳核验接收端邻接仍处于发送纪元。"""
+    """沿各路由器当前最优路径逐跳投递；每跳核验接收端邻接仍处于发送纪元。
+
+    每次实际尝试向 msg["trace"] 追加一条追溯记录：发生步骤号 + 逐跳裁决
+    （发送/接收路由器、采用的前缀与最优路径、发送纪元、裁决结果、未继续
+    转发的直接原因）。旧尝试记录保持原样，绝不改写。
+    """
     cur = msg["src"]
     hops = [cur]
     visited = {cur}
     limit = len(state["routers"]) + 2
+    attempt = {"step": state.get("step", 0), "hops": [], "outcome": "pending", "detail": ""}
+    trace = msg.setdefault("trace", [])
+
+    def finish(status, detail):
+        msg["status"] = status
+        msg["hops"] = hops
+        msg["detail"] = detail
+        attempt["outcome"] = status
+        attempt["detail"] = detail
+        trace.append(attempt)
+
     for _ in range(limit):
         if cur == msg["dst"]:
-            msg["status"] = "delivered"
-            msg["hops"] = hops
-            msg["detail"] = ""
+            finish("delivered", "")
             logs.append({"kind": "delivered", "text": "消息 #{} 已投递：{}".format(msg["id"], " → ".join(hops))})
             return
         best = best_path(state, cur, msg["dst"])
         if best is None or best["neighbor"] == "":
-            msg["hops"] = hops
-            msg["detail"] = "{} 无到 {} 的可用路由，滞留待投递".format(cur, msg["dst"])
+            detail = "{} 无到 {} 的可用路由，滞留待投递".format(cur, msg["dst"])
+            attempt["hops"].append({
+                "from": cur, "to": None, "prefix": msg["dst"],
+                "path": list(best["path"]) if best else None,
+                "localpref": best["localpref"] if best else None,
+                "epoch": None, "current_epoch": None,
+                "verdict": "no_route", "reason": detail,
+            })
+            finish("pending", detail)
             return
         nxt = best["neighbor"]
         adj = state["adj"].get(adj_key(nxt, cur))
-        if adj is None or not adj["up"]:
-            msg["hops"] = hops
-            msg["detail"] = "邻接 {}->{} 不可用，滞留待投递".format(nxt, cur)
-            return
         sent_epoch = msg["snapshot"].get(adj_key(nxt, cur))
+        hop = {
+            "from": cur, "to": nxt, "prefix": msg["dst"],
+            "path": list(best["path"]), "localpref": best["localpref"],
+            "epoch": sent_epoch,
+            "current_epoch": adj["epoch"] if adj else None,
+            "verdict": "forward", "reason": "",
+        }
+        attempt["hops"].append(hop)
+        if adj is None or not adj["up"]:
+            detail = "邻接 {}->{} 不可用，滞留待投递".format(nxt, cur)
+            hop["verdict"] = "adj_down"
+            hop["reason"] = detail
+            finish("pending", detail)
+            return
         if sent_epoch != adj["epoch"]:
-            msg["status"] = "expired"
-            msg["hops"] = hops
-            msg["detail"] = "邻接 {}->{} 纪元 {} → {}".format(nxt, cur, sent_epoch, adj["epoch"])
+            detail = "邻接 {}->{} 纪元 {} → {}".format(nxt, cur, sent_epoch, adj["epoch"])
+            hop["verdict"] = "expired"
+            hop["reason"] = "发送纪元 {} 与邻接当前纪元 {} 不一致，按过期消息忽略".format(sent_epoch, adj["epoch"])
+            finish("expired", detail)
             logs.append({"kind": "expired", "text": "过期消息忽略：消息 #{}（{}→{}）发送时邻接 {}->{} 纪元 {}，当前纪元 {}".format(
                 msg["id"], msg["src"], msg["dst"], nxt, cur, sent_epoch, adj["epoch"])})
             return
         if nxt in visited:
-            msg["status"] = "failed"
-            msg["hops"] = hops
-            msg["detail"] = "检测到数据环路"
+            detail = "检测到数据环路"
+            hop["verdict"] = "loop"
+            hop["reason"] = detail
+            finish("failed", detail)
             logs.append({"kind": "failed", "text": "消息 #{} 投递失败：数据环路".format(msg["id"])})
             return
         hops.append(nxt)
         visited.add(nxt)
         cur = nxt
-    msg["status"] = "failed"
-    msg["hops"] = hops
-    msg["detail"] = "跳数超限"
+    detail = "跳数超限"
+    if attempt["hops"]:
+        attempt["hops"][-1]["verdict"] = "hop_limit"
+        attempt["hops"][-1]["reason"] = detail
+    finish("failed", detail)
     logs.append({"kind": "failed", "text": "消息 #{} 投递失败：跳数超限".format(msg["id"])})
 
 
 def _attempt_deliveries(state, logs):
+    """自动重试全部待投递消息；同一事件步骤内不生成重复追溯记录。"""
+    step = state.get("step", 0)
     for msg in state["messages"]:
-        if msg["status"] == "pending":
-            _attempt(state, msg, logs)
+        if msg["status"] != "pending":
+            continue
+        trace = msg.get("trace") or []
+        if trace and trace[-1]["step"] == step:
+            continue  # 本步骤已尝试过，自动重试不得重复记录
+        _attempt(state, msg, logs)
 
 
 def apply_event(state, event):
     """应用单条事件并返回本步骤日志；随后自动重试全部待投递消息。"""
     logs = []
+    state["step"] = state.get("step", 0) + 1
     etype = event.get("type")
     if etype == "announce":
         path = event.get("path") or [event["from"]]

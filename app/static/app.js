@@ -6,6 +6,8 @@ let currentRun = null;      // 最近一次获取的演练（含全部已完成�
 let selectedStep = 0;       // 当前查看的步骤号
 let followLatest = true;    // 是否跟随最新完成步骤
 let pollTimer = null;
+let selectedMsgId = null;   // 当前选中追溯的消息编号
+let selectedMsgTrace = null;// 最近一次获取的追溯记录（含全部尝试）
 
 const LOG_KIND_TEXT = {
   originate: "始发", accept: "接受", duplicate: "重复", withdraw: "撤销",
@@ -20,6 +22,15 @@ const MSG_STATUS = {
   delivered: "已投递",
   expired: "过期忽略",
   failed: "失败",
+};
+
+const HOP_VERDICT = {
+  forward: "继续转发",
+  no_route: "无可用路由",
+  adj_down: "邻接不可用",
+  expired: "纪元过期",
+  loop: "数据环路",
+  hop_limit: "跳数超限",
 };
 
 function esc(s) {
@@ -75,9 +86,15 @@ async function startDrill() {
 
 async function refresh() {
   const { data } = await api("/api/drills/current");
+  const prevRunId = currentRun ? currentRun.run_id : null;
   currentRun = data ? data.run : null;
   if (currentRun && followLatest) selectedStep = currentRun.completed_steps;
+  if ((currentRun ? currentRun.run_id : null) !== prevRunId) {
+    selectedMsgId = null;  // 演练已更换，旧消息标识不再有效
+    selectedMsgTrace = null;
+  }
   render();
+  if (selectedMsgId != null) loadTrace(selectedMsgId).catch(console.error);
   if (currentRun && !currentRun.done) schedulePoll();
 }
 
@@ -217,11 +234,70 @@ function renderMessages(run, state) {
     const status = MSG_STATUS[m.status] || m.status;
     const cls = `msg-${m.status}`;
     const hops = m.hops && m.hops.length ? m.hops.join(" → ") : "—";
+    const sel = m.id === selectedMsgId ? " trace-selected" : "";
     return [`#${m.id}`, `${esc(m.src)} → ${esc(m.dst)}`, esc(m.payload || ""),
-            `<span class="${cls}">${esc(status)}</span>`, esc(hops), esc(m.detail || "")];
+            `<span class="${cls}">${esc(status)}</span>`, esc(hops), esc(m.detail || ""),
+            `<button class="trace-btn${sel}" data-mid="${m.id}">追溯</button>`];
   });
   $("msg-table").innerHTML =
-    tableHtml(["#", "源 → 宿", "内容", "状态", "路径", "说明"], rows, "暂无消息");
+    tableHtml(["#", "源 → 宿", "内容", "状态", "路径", "说明", "追溯"], rows, "暂无消息");
+}
+
+async function loadTrace(mid) {
+  selectedMsgId = mid;
+  const { ok, data } = await api(`/api/drills/current/messages/${mid}/trace`);
+  if (mid !== selectedMsgId) return;  // 期间已改选其他消息
+  if (!ok || !data || !data.message) {
+    selectedMsgTrace = null;
+    $("trace-view").innerHTML =
+      `<div class="errors trace-error">${esc((data && data.error) || "获取消息追溯失败")}</div>`;
+    render();
+    return;
+  }
+  selectedMsgTrace = data.message;
+  render();
+}
+
+function renderTrace() {
+  const box = $("trace-view");
+  if (selectedMsgId == null) {
+    box.innerHTML = '<div class="empty">在“待投递消息”表中点击一条消息的「追溯」，复核每一跳为何采用当时的下一跳</div>';
+    return;
+  }
+  if (!selectedMsgTrace) return;  // 错误信息已渲染
+  const m = selectedMsgTrace;
+  const status = MSG_STATUS[m.status] || m.status;
+  const head = `<div class="trace-head">消息 #${m.id}：${esc(m.src)} → ${esc(m.dst)}` +
+    `（${esc(m.payload || "空载荷")}）· 当前状态：<span class="msg-${m.status}">${esc(status)}</span></div>`;
+  // 只展示不晚于当前查看步骤的尝试：旧尝试保持原样，新尝试按发生步骤追加
+  const attempts = (m.trace || []).filter((a) => a.step <= selectedStep);
+  if (!attempts.length) {
+    box.innerHTML = head + '<div class="empty">截至当前查看步骤暂无投递尝试</div>';
+    return;
+  }
+  const body = attempts.map((a) => {
+    const hops = a.hops.map((h, i) => {
+      const to = h.to == null ? "—" : h.to;
+      const path = h.path ? h.path.join(" → ") : "—";
+      const lp = h.localpref == null ? "—" : (h.localpref >= (1 << 30) ? "∞" : String(h.localpref));
+      const epoch = h.epoch == null ? "—" : String(h.epoch);
+      const curEpoch = h.current_epoch == null ? "—" : String(h.current_epoch);
+      const verdict = HOP_VERDICT[h.verdict] || h.verdict;
+      const reason = h.reason
+        ? `<div class="trace-reason">未继续转发：${esc(h.reason)}</div>` : "";
+      return `<div class="trace-hop hop-${esc(h.verdict)}">` +
+        `<b>第 ${i + 1} 跳：</b>${esc(h.from)} → ${esc(to)}` +
+        ` · 前缀 ${esc(h.prefix)} · 最优路径 ${esc(path)} · 本地偏好 ${lp}` +
+        ` · 发送纪元 ${epoch} / 当前纪元 ${curEpoch} · 裁决：${esc(verdict)}` +
+        reason + `</div>`;
+    }).join("");
+    const outcome = MSG_STATUS[a.outcome] || a.outcome;
+    const detail = a.detail ? ` · ${esc(a.detail)}` : "";
+    return `<div class="trace-attempt">` +
+      `<div class="trace-attempt-head">步骤 ${a.step} 的尝试 · 结果：${esc(outcome)}${detail}</div>` +
+      `${hops}</div>`;
+  }).join("");
+  box.innerHTML = head + body;
 }
 
 function render() {
@@ -233,6 +309,9 @@ function render() {
     $("inbound-table").innerHTML = '<div class="empty">无数据</div>';
     $("best-table").innerHTML = '<div class="empty">无数据</div>';
     $("msg-table").innerHTML = '<div class="empty">无数据</div>';
+    selectedMsgId = null;
+    selectedMsgTrace = null;
+    renderTrace();
     return;
   }
   const step = currentRun.steps[selectedStep];
@@ -241,11 +320,16 @@ function render() {
   renderInbound(currentRun, state);
   renderBest(currentRun, step);
   renderMessages(currentRun, state);
+  renderTrace();
 }
 
 function bind() {
   $("start-btn").addEventListener("click", () => { startDrill().catch(console.error); });
   $("sample-btn").addEventListener("click", () => { loadSample().catch(console.error); });
+  $("msg-table").addEventListener("click", (e) => {
+    const btn = e.target.closest("button.trace-btn");
+    if (btn) loadTrace(Number(btn.dataset.mid)).catch(console.error);
+  });
   $("step-slider").addEventListener("input", (e) => {
     followLatest = false;
     $("follow-chk").checked = false;

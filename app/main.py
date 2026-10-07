@@ -7,10 +7,14 @@
   GET  /api/sample            预置示例演练（DSL 文本）
   POST /api/drills            创建新演练（后台计算并保存检查点）
   GET  /api/drills/current    当前演练及已完成步骤（页面重开后恢复）
+  GET  /api/drills/current/messages/<编号>/trace
+                              当前演练中指定消息的逐跳追溯记录；
+                              不存在或不属于当前演练的标识返回明确错误
 """
 
 import json
 import os
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -30,6 +34,8 @@ CONTENT_TYPES = {
 }
 
 MAX_BODY = 1 << 20
+
+TRACE_RE = re.compile(r"^/api/drills/current/messages/([^/]+)/trace$")
 
 
 def make_handler(manager):
@@ -77,7 +83,22 @@ def make_handler(manager):
                 return self._json(sample.sample_drill())
             if path == "/api/drills/current":
                 return self._json(manager.current())
+            m = TRACE_RE.match(path)
+            if m:
+                return self._message_trace(m.group(1))
             return self._json({"error": "not found"}, 404)
+
+        def _message_trace(self, raw_id):
+            try:
+                mid = int(raw_id)
+            except ValueError:
+                return self._json(
+                    {"error": "消息标识 {!r} 非法：须为整数编号".format(raw_id)}, 404)
+            msg = manager.message_trace(mid)
+            if msg is None:
+                return self._json(
+                    {"error": "消息 #{} 不存在或不属于当前演练".format(mid)}, 404)
+            return self._json({"message": msg})
 
         def do_HEAD(self):
             self.do_GET()

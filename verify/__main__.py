@@ -155,6 +155,47 @@ def smoke_e2e_drill():
     return True, "端到端演练收敛一致，环路拒绝/旧纪元撤销/过期消息忽略均已展示"
 
 
+def smoke_message_trace():
+    """消息追溯：选中演练消息复核逐跳裁决；不存在或外演练标识须明确报错。"""
+    _, body = http_get("/api/drills/current")
+    run = json.loads(body)["run"]
+    if not run or not run["done"]:
+        return False, "当前无已完成演练"
+    messages = run["steps"][-1]["state"]["messages"]
+    if not messages:
+        return False, "演练中无消息"
+    mid = messages[0]["id"]
+    status, body = http_get("/api/drills/current/messages/%d/trace" % mid)
+    if status != 200:
+        return False, "追溯查询失败（HTTP {}）".format(status)
+    msg = json.loads(body).get("message")
+    if not msg or msg.get("id") != mid or not msg.get("trace"):
+        return False, "追溯记录缺失或不完整"
+    hop = msg["trace"][0]["hops"][0]
+    for field in ("from", "to", "prefix", "path", "epoch", "verdict", "reason"):
+        if field not in hop:
+            return False, "追溯跳记录缺少字段 {}".format(field)
+    # 滞留后过期的消息应保留多次尝试：旧记录不变，新记录按步骤追加
+    expired = [m for m in messages if m["status"] == "expired"]
+    if expired:
+        status, body = http_get("/api/drills/current/messages/%d/trace" % expired[0]["id"])
+        attempts = json.loads(body)["message"]["trace"]
+        if len(attempts) < 2 or attempts[-1]["outcome"] != "expired":
+            return False, "滞留消息的多次尝试未按发生步骤追加"
+        if [a["step"] for a in attempts] != sorted(a["step"] for a in attempts):
+            return False, "追溯尝试未按步骤顺序排列"
+    # 不存在的消息标识须返回明确错误（404 + error），不得泄露其他演练
+    try:
+        http_get("/api/drills/current/messages/99999/trace")
+        return False, "不存在的消息标识未报错"
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            return False, "不存在的消息标识返回 HTTP {}（应为 404）".format(exc.code)
+        if "error" not in json.loads(exc.read().decode("utf-8")):
+            return False, "错误响应缺少 error 字段"
+    return True, "逐跳追溯可查，多次尝试按步骤追加，不存在标识返回 404 明确错误"
+
+
 # ---------------- 主流程 ----------------
 
 def main():
@@ -180,6 +221,7 @@ def main():
             ("HTTP 冒烟：/healthz", smoke_healthz),
             ("HTTP 冒烟：站点页面", smoke_site),
             ("HTTP 冒烟：端到端演练收敛", smoke_e2e_drill),
+            ("HTTP 冒烟：消息逐跳追溯", smoke_message_trace),
         ):
             try:
                 ok, detail = fn()
@@ -187,7 +229,8 @@ def main():
                 ok, detail = False, repr(exc)
             report(name, ok, detail)
     else:
-        for name in ("HTTP 冒烟：/healthz", "HTTP 冒烟：站点页面", "HTTP 冒烟：端到端演练收敛"):
+        for name in ("HTTP 冒烟：/healthz", "HTTP 冒烟：站点页面", "HTTP 冒烟：端到端演练收敛",
+                     "HTTP 冒烟：消息逐跳追溯"):
             report(name, False, "服务未就绪，跳过")
 
     failed = [r for r in RESULTS if not r[1]]

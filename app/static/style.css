@@ -164,6 +164,51 @@ td { font-family: ui-monospace, Menlo, Consolas, monospace; }
 .msg-expired { color: var(--stale); }
 .msg-failed { color: var(--bad); }
 
+.trace-btn { padding: 2px 10px; font-size: 12px; }
+.trace-btn.trace-selected { border-color: var(--accent); color: var(--accent); }
+
+.trace-head {
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  background: #0b0f14;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+
+.trace-error { display: block; margin-top: 0; }
+
+.trace-attempt {
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #0b0f14;
+}
+
+.trace-attempt-head {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.trace-hop {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  padding: 3px 8px;
+  border-left: 3px solid var(--border);
+  margin: 3px 0;
+}
+
+.trace-hop.hop-forward { border-left-color: var(--ok); }
+.trace-hop.hop-no_route, .trace-hop.hop-adj_down { border-left-color: var(--warn); }
+.trace-hop.hop-expired { border-left-color: var(--stale); }
+.trace-hop.hop-loop, .trace-hop.hop-hop_limit { border-left-color: var(--bad); }
+
+.trace-reason { color: var(--warn); padding-top: 2px; }
+
 footer {
   padding: 12px 24px 20px;
   color: var(--muted);
