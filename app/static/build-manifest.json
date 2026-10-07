@@ -1,0 +1,19 @@
+{
+  "files": [
+    {
+      "name": "app.js",
+      "sha256": "7a5ed6a39a59249b5f9e535db230e4efe21a6da1969ce56c656f100604491a44",
+      "bytes": 9900
+    },
+    {
+      "name": "index.html",
+      "sha256": "1796123b2a73401cc65af3f3588435f73c2c77dec9f5584ccee730a390e07d3f",
+      "bytes": 2992
+    },
+    {
+      "name": "style.css",
+      "sha256": "c589ce00cb7cbf1141473cdf61487916a5c7cf792cf5d5189c590f42a5900e3a",
+      "bytes": 4630
+    }
+  ]
+}

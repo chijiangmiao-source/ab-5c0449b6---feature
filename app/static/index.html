@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>星间中继网络演练台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>星间中继网络演练台</h1>
+  <p class="sub">路径通告 / 撤销乱序复核 · 链路纪元校验 · 后台计算与检查点恢复</p>
+  <div id="run-status" class="status">正在载入…</div>
+</header>
+
+<main>
+  <section class="panel" id="editor-panel">
+    <h2>演练录入</h2>
+    <div class="editor-cols">
+      <label>路由器（空白分隔，至多 8 台）
+        <textarea id="routers" rows="3" spellcheck="false"></textarea>
+      </label>
+      <label>有向邻接（每行：源 宿 pref=本地偏好 epoch=起始纪元）
+        <textarea id="links" rows="10" spellcheck="false"></textarea>
+      </label>
+      <label>事件（每行一项，至多 64 项：announce / withdraw / disconnect / reconnect / deliver）
+        <textarea id="events" rows="16" spellcheck="false"></textarea>
+      </label>
+    </div>
+    <div class="editor-actions">
+      <button id="start-btn" class="primary">开始新演练</button>
+      <button id="sample-btn">载入示例</button>
+      <span class="hint">通告中“从 == 到”表示本机始发；路径含接收方标识将被拒绝传播</span>
+    </div>
+    <div id="errors" class="errors"></div>
+  </section>
+
+  <section class="panel" id="playback-panel">
+    <h2>逐步复核</h2>
+    <div class="step-bar">
+      <button id="prev-btn" title="上一步">◀</button>
+      <input type="range" id="step-slider" min="0" max="0" value="0">
+      <button id="next-btn" title="下一步">▶</button>
+      <span id="step-label" class="step-label">—</span>
+      <label class="follow"><input type="checkbox" id="follow-chk" checked> 跟随最新步骤</label>
+    </div>
+    <div id="event-view" class="event-view"></div>
+    <div class="legend">
+      <span class="tag tag-loop">环路拒绝</span>
+      <span class="tag tag-stale">过期通告/旧纪元撤销忽略</span>
+      <span class="tag tag-expired">过期消息忽略</span>
+      <span class="tag tag-delivered">投递成功</span>
+      <span class="tag tag-topo">链路断开/重连</span>
+    </div>
+    <div id="logs" class="logs"></div>
+  </section>
+
+  <section class="grid">
+    <div class="panel">
+      <h2>邻接状态</h2>
+      <div id="adj-table"></div>
+    </div>
+    <div class="panel">
+      <h2>邻居入站路由</h2>
+      <div id="inbound-table"></div>
+    </div>
+    <div class="panel">
+      <h2>当前最优路径</h2>
+      <div id="best-table"></div>
+    </div>
+    <div class="panel">
+      <h2>待投递消息</h2>
+      <div id="msg-table"></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>收敛校验：演练完成后自动从头不中断回放全部事件并与检查点逐步比对。</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
